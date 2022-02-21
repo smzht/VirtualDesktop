@@ -38,6 +38,7 @@ namespace WindowsDesktop
 			ThrowIfNotSupported();
 
 			NativeMethods.GetWindowThreadProcessId(hWnd, out var processId);
+			virtualDesktop.ForegroundHandle = hWnd;
 
 			if (Process.GetCurrentProcess().Id == processId)
 			{

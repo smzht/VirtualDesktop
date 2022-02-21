@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using WindowsDesktop.Interop;
 using WindowsDesktop.Properties;
 using JetBrains.Annotations;
@@ -17,6 +18,8 @@ namespace WindowsDesktop
 	[UsedImplicitly(ImplicitUseTargetFlags.Members)]
 	public partial class VirtualDesktop : ComInterfaceWrapperBase, IDisposable
 	{
+		private static readonly string _taskViewClassName = ProductInfo.OSBuild >= 22000 ? "XamlExplorerHostIslandWindow" : "Windows.UI.Core.CoreWindow";
+
 		/// <summary>
 		/// Gets the unique identifier for this virtual desktop.
 		/// </summary>
@@ -67,6 +70,8 @@ namespace WindowsDesktop
 			}
 		}
 
+		public IntPtr ForegroundHandle { get; set; }
+
 		[UsedImplicitly]
 		internal VirtualDesktop(ComInterfaceAssembly assembly, Guid id, object comObject)
 			: base(assembly, comObject, latestVersion: 2)
@@ -89,7 +94,47 @@ namespace WindowsDesktop
 		/// </summary>
 		public void Switch()
 		{
+			var current = ComInterface.VirtualDesktopManagerInternal.GetCurrentDesktop();
+			var currentClassName = string.Empty;
+			if (current != null)
+			{
+				var currentHandle = NativeMethods.GetForegroundWindow();
+				var foregroundDesktop = FromHwnd(currentHandle);
+				if (foregroundDesktop != null && current.Id == foregroundDesktop.Id)
+				{
+					current.ForegroundHandle = currentHandle;
+				}
+				else
+				{
+					current.ForegroundHandle = IntPtr.Zero;
+				}
+				var classNameBuffer = new StringBuilder(256 + 1);
+				NativeMethods.GetClassName(current.ForegroundHandle, classNameBuffer, classNameBuffer.Capacity);
+				currentClassName = classNameBuffer.ToString();
+			}
+			foreach (var hWnd in this.GetAllWindows())
+			{
+				NativeMethods.SendMessage(hWnd, WindowsMessages.WM_KILLFOCUS, IntPtr.Zero, IntPtr.Zero);
+			}
 			ComInterface.VirtualDesktopManagerInternal.SwitchDesktop(this);
+			if (currentClassName == _taskViewClassName)
+			{
+				this.ForegroundHandle = IntPtr.Zero;
+				return;
+			}
+			var foregroundHandle = this.ForegroundHandle;
+			if (foregroundHandle != IntPtr.Zero)
+			{
+				var foregroundDesktop = FromHwnd(foregroundHandle);
+				if (foregroundDesktop != null && this.Id == foregroundDesktop.Id)
+				{
+					NativeMethods.ForceSetForegroundWindow(foregroundHandle);
+				}
+				else
+				{
+					this.ForegroundHandle = IntPtr.Zero;
+				}
+			}
 		}
 
 		/// <summary>
@@ -149,6 +194,22 @@ namespace WindowsDesktop
 			catch (COMException ex) when (ex.Match(HResult.TYPE_E_OUTOFBOUNDS))
 			{
 				return null;
+			}
+		}
+
+		private List<IntPtr> GetAllWindows()
+		{
+			var hWnds = new List<IntPtr>();
+			_ = NativeMethods.EnumWindows(AddHandleOnCurrentDesktop, IntPtr.Zero);
+			return hWnds;
+
+			bool AddHandleOnCurrentDesktop(IntPtr hWnd, IntPtr lParam)
+			{
+				if (FromHwnd(hWnd) == this)
+				{
+					hWnds.Add(hWnd);
+				}
+				return true;
 			}
 		}
 
